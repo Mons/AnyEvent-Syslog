@@ -228,6 +228,7 @@ sub _connected {
 
 sub insert_after {
 	my ($self,$cur,$data,$msgs) = @_;
+	local $data->{next};
 	my $next;
 	if (exists $cur->{next}) {
 		# add to middle
@@ -253,6 +254,7 @@ sub insert_after {
 	} else {
 		$self->{wlast} = $cur;
 	}
+	#$self->_printq;
 }
 
 sub _ww {
@@ -266,6 +268,8 @@ sub _ww {
 		$self->{wbuf} = $cur = $cur->{next};
 	};
 	while (exists $cur->{w} or exists $cur->{next}) {
+		#warn "w=$cur->{w} or next=$cur->{next}";
+		#$self->_printq;
 		if (my $ref = ref $cur->{w}) {
 			if ($ref eq 'CODE') {
 				$cur->{w}->($cur);
@@ -354,6 +358,7 @@ sub _ww {
 					#warn "Full wbuf: ".dumper $wcur, $detect, $self;
 					warn "Detected size: $self->{max_msg_size} ($self->{max_buf_size}). Left: $detect->{left}";
 					$self->insert_after($_[0],$wcur,[ $detect->{left} ]);
+					#warn "inserted";
 					
 					undef $detect;
 					undef $wcur;
@@ -400,10 +405,16 @@ sub _printq {
 	my $self = shift;
 	my $cur = $self->{wbuf};
 	print "$self->{wsize}: ";
+	my %seen;
 	while($cur) {
+		$seen{0+$cur} = 1;
 		print "$cur->{s}(".length($cur->{w}).") ";
 		if (exists $cur->{next}) {
 			$cur = $cur->{next};
+			if ($seen{0+$cur}) {
+				die "Catched recursion! ".dumper $self->{wbuf};
+				return;
+			}
 		} else {
 			undef $cur;
 		}
