@@ -51,16 +51,16 @@ sub LOG_INFO     () { 6 }
 sub LOG_DEBUG    () { 7 }
 
 our %LEVEL = (
-        emerg     => LOG_EMERG,
-        alert     => LOG_ALERT,
-        crit      => LOG_CRIT,
-        err       => LOG_ERR,
-        error     => LOG_ERR,
-        warning   => LOG_WARNING,
-        warn      => LOG_WARNING,
-        notice    => LOG_NOTICE,
-        info      => LOG_INFO,
-        debug     => LOG_DEBUG,
+	emerg     => LOG_EMERG,
+	alert     => LOG_ALERT,
+	crit      => LOG_CRIT,
+	err       => LOG_ERR,
+	error     => LOG_ERR,
+	warning   => LOG_WARNING,
+	warn      => LOG_WARNING,
+	notice    => LOG_NOTICE,
+	info      => LOG_INFO,
+	debug     => LOG_DEBUG,
 );
 
 sub LOG_KERN     () { 0 }
@@ -85,26 +85,26 @@ sub LOG_LOCAL6   () { 176 }
 sub LOG_LOCAL7   () { 184 }
 
 our %FACILITY = (
-        kern      => LOG_KERN,
-        user      => LOG_USER,
-        mail      => LOG_MAIL,
-        daemon    => LOG_DAEMON,
-        auth      => LOG_AUTH,
-        syslog    => LOG_SYSLOG,
-        lpr       => LOG_LPR,
-        news      => LOG_NEWS,
-        uucp      => LOG_UUCP,
-        cron      => LOG_CRON,
-        authpriv  => LOG_AUTHPRIV,
-        ftp       => LOG_FTP,
-        local0    => LOG_LOCAL0,
-        local1    => LOG_LOCAL1,
-        local2    => LOG_LOCAL2,
-        local3    => LOG_LOCAL3,
-        local4    => LOG_LOCAL4,
-        local5    => LOG_LOCAL5,
-        local6    => LOG_LOCAL6,
-        local7    => LOG_LOCAL7,
+	kern      => LOG_KERN,
+	user      => LOG_USER,
+	mail      => LOG_MAIL,
+	daemon    => LOG_DAEMON,
+	auth      => LOG_AUTH,
+	syslog    => LOG_SYSLOG,
+	lpr       => LOG_LPR,
+	news      => LOG_NEWS,
+	uucp      => LOG_UUCP,
+	cron      => LOG_CRON,
+	authpriv  => LOG_AUTHPRIV,
+	ftp       => LOG_FTP,
+	local0    => LOG_LOCAL0,
+	local1    => LOG_LOCAL1,
+	local2    => LOG_LOCAL2,
+	local3    => LOG_LOCAL3,
+	local4    => LOG_LOCAL4,
+	local5    => LOG_LOCAL5,
+	local6    => LOG_LOCAL6,
+	local7    => LOG_LOCAL7,
 );
 
 
@@ -115,6 +115,7 @@ sub new {
 		socket      => '/dev/log',
 		socket_type => SOCK_STREAM,
 		pid         => 1,
+		max_queue_size => 10,
 		@_,
 	}, $pk;
 	$self->{ident} = basename($0) || getlogin() || getpwuid($<) || 'syslog' unless length $self->{ident};
@@ -126,8 +127,22 @@ sub new {
 	$self;
 }
 
+sub _warn {
+	my $self = shift;
+	if ($self->{warn}) {
+		$self->{warn}( @_ );
+	} else {
+		goto &CORE::warn;
+	}
+}
+
 sub _connect_error {
 	weaken(my $self = shift);
+	if ($self->{on_error}) {
+		$self->{on_error}(@_)
+	} else {
+		$self->_warn("Connect error: @_");
+	}
 	$self->{cnt} = AE::timer 1,0,sub {
 		$self or return;
 		delete $self->{cnt};
@@ -141,10 +156,11 @@ use uni::perl ':dumper';
 sub _connect_ready {
 	my ($self,$sock) = @_;
 	$self->{fh} = $sock;
+	binmode $self->{fh}, ':raw';
 	$self->{ww} = AE::io $sock, 1, sub {
 		if (my $sin = getpeername $self->{fh}) {
 			my ($port, $host) = AnyEvent::Socket::unpack_sockaddr $sin;
-			warn dumper [$port,$host];
+			#warn dumper [$port,$host];
 			delete $self->{ww};delete $self->{to};
 			$self->_connected;
 		} else {
@@ -244,7 +260,7 @@ sub _ww {
 	delete $self->{ww};
 	return unless $self->{fh};
 	my $cur = $self->{wbuf};
-	warn "enter _ww: $cur->{s}";
+	#warn "enter _ww: $cur->{s}";
 	while ( !exists $cur->{w} and exists $cur->{next} ) {
 		$self->{wsize}--;
 		$self->{wbuf} = $cur = $cur->{next};
@@ -254,7 +270,7 @@ sub _ww {
 			if ($ref eq 'CODE') {
 				$cur->{w}->($cur);
 			} else {
-				warn "Doesn't know how to process $ref";
+				$self->_warn( "Doesn't know how to process $ref" );
 			}
 			delete $cur->{w};
 		}
@@ -263,7 +279,7 @@ sub _ww {
 				my $prev = $cur;
 				$self->{wbuf} = $cur = $cur->{next};
 				$self->{wsize}--;
-				warn "take next $cur->{s} after $prev->{s} (left $self->{wsize})";
+				#warn "take next $cur->{s} after $prev->{s} (left $self->{wsize})";
 				next;
 			}
 			last;
@@ -280,7 +296,7 @@ sub _ww {
 		my $buf = $cur->{pre}.$cur->{w}.$cur->{eol};
 		my $need = length $buf;
 		#warn "writing $need bytes [".substr($buf,0,length($buf) - 2)."]";
-		warn "writing $cur->{s}";
+		#warn "writing $cur->{s}";
 		my $len = syswrite $self->{fh}, $buf, $need, 0;
 		if (defined $len) {
 			if ($need > $len) {
@@ -289,7 +305,7 @@ sub _ww {
 				}
 				my $left = substr( $buf, $len );
 				substr($left, -length $cur->{eol}, length $cur->{eol}, '');# cut EOL
-				warn "Not written complete message: need $need, written: $len. Wrap [$left] to next step";
+				$self->_warn( "Not written complete message: need $need, written: $len. Wrap [$left] to next step" );
 				$self->insert_after($cur,{
 					pre => $cur->{pre},
 					eol => $cur->{eol},
@@ -299,7 +315,23 @@ sub _ww {
 			delete $cur->{w};
 			next;
 		}
-		elsif ($! == Errno::EMSGSIZE or $! == Errno::ENOBUFS) {
+		elsif ($! == Errno::ENOBUFS) {
+			# Write buffer full. syslog don't receive our messages
+			$self->_warn( "Write buffer full. syslog don't receive our messages" );
+			if ($self->{max_queue_size} and $self->{wsize} > $self->{max_queue_size}) {
+				while ( $self->{wsize} > $self->{max_queue_size} and exists $cur->{next} ) {
+					$self->_warn( "ENOBUFS: Drop $cur->{s}" );
+					$self->{wsize}--;
+					$self->{wbuf} = $cur = $cur->{next};
+				};
+			}
+			$self->{enobufs_timer} = AE::timer 0.1,0,sub {
+				$self or return;
+				return $self->{ww} = &AE::io( $self->{fh}, 1, sub { $self and $self->_ww; });
+			};
+			return;
+		}
+		elsif ($! == Errno::EMSGSIZE) {
 			#warn "$! ($need)";
 			if (exists $cur->{max_detect}) {
 				my $dt = $cur->{max_detect};
@@ -338,14 +370,14 @@ sub _ww {
 			return $self->{ww} = &AE::io( $self->{fh}, 1, sub { $self and $self->_ww; });
 		}
 		else {
-			warn "Socket connection aborted: $!";
+			$self->_warn("Socket connection aborted: $!");
 			#$cur->{w} = '';
 			$self->{connected} = 0;
 			$self->_connect_stream;
 		}
 	}
-	warn "leaving _WW";
-	$self->_printq;
+	#warn "leaving _ww";
+	#$self->_printq;
 }
 
 
@@ -367,6 +399,7 @@ sub stime () {
 sub _printq {
 	my $self = shift;
 	my $cur = $self->{wbuf};
+	print "$self->{wsize}: ";
 	while($cur) {
 		print "$cur->{s}(".length($cur->{w}).") ";
 		if (exists $cur->{next}) {
@@ -382,7 +415,14 @@ sub _printq {
 sub syslog {
 	my $self = shift;
 	my $to = shift;
-	my $msg = shift; utf8::encode $msg if utf8::is_utf8 $msg;
+	my $msg;
+	if (@_ > 1 and index($_[0],'%') > -1) {
+		my $fmt = shift;
+		$msg = sprintf($fmt,@_);
+	} else {
+		$msg = "@_";
+	}
+	utf8::encode $msg if utf8::is_utf8 $msg;
 	$msg =~ s{(\r?\n)+$}{}s;
 	
 	my @to = split '\|',$to;
@@ -426,7 +466,7 @@ sub syslog {
 			$self->{wlast} = $l;
 		}
 	}
-	$self->_printq;
+	#$self->_printq;
 	#warn dumper $self->{wbuf};
 	if ($self->{connected}) {
 		$self->_ww;
