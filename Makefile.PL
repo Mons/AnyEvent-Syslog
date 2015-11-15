@@ -1,20 +1,18 @@
-use inc::Module::Install;
+use 5.008008;
+use ExtUtils::MakeMaker;
+$ENV{AUTHOR} and require CPAN::Meta;
 
-my $MI  = $Module::Install::MAIN;
-name           'AnyEvent-Syslog';
-all_from       'lib/AnyEvent/Syslog.pm';
-author         'Mons Anderson <mons@cpan.org>';
-license        'perl';
-
-build_requires 'Test::More';
-build_requires 'lib::abs',  '0.90';
-
-requires 'common::sense',    2;
-# requires 'uni::perl';
-
-auto_provides;
-auto_install;
-
-WriteAll;
-
-print STDERR "Generated makefile for ".$MI->load('name')->name."-".$MI->load('version')->version."\n";
+WriteMakefile(
+	NAME              => 'AnyEvent::Syslog',
+	VERSION_FROM      => 'lib/AnyEvent/Syslog.pm',
+	BUILD_REQUIRES => {
+		'Test::More' => 0,
+	},
+	PREREQ_PM         => {
+		AnyEvent => 7,
+		'common::sense' => 2,
+	},
+	ABSTRACT_FROM  => 'lib/AnyEvent/Syslog.pm', # retrieve abstract from module
+	AUTHOR         => 'Mons Anderson <mons@cpan.org>',
+	LICENSE        => 'perl',
+);

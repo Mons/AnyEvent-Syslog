@@ -1,0 +1,14 @@
+.gitignore
+Changes
+ex/govlog.pl
+ex/sample.pl
+lib/AnyEvent/Syslog.pm
+LICENSE
+Makefile.PL
+MANIFEST			This list of files
+MANIFEST.SKIP
+README
+t/00-load.t
+t/pod-coverage.t
+t/pod.t
+xt/99-dist.t
