@@ -8,6 +8,10 @@ use warnings;
 use Carp;
 use File::Basename;
 use AnyEvent::Socket;
+use POSIX ();
+use Time::HiRes;
+use Time::Local 'timegm_nocheck';
+
 
 =head1 NAME
 
@@ -151,8 +155,6 @@ sub _connect_error {
 	};
 }
 
-use uni::perl ':dumper';
-
 sub _connect_ready {
 	my ($self,$sock) = @_;
 	$self->{fh} = $sock;
@@ -160,7 +162,6 @@ sub _connect_ready {
 	$self->{ww} = AE::io $sock, 1, sub {
 		if (my $sin = getpeername $self->{fh}) {
 			my ($port, $host) = AnyEvent::Socket::unpack_sockaddr $sin;
-			#warn dumper [$port,$host];
 			delete $self->{ww};delete $self->{to};
 			$self->_connected;
 		} else {
@@ -331,6 +332,7 @@ sub _ww {
 			}
 			$self->{enobufs_timer} = AE::timer 0.1,0,sub {
 				$self or return;
+				delete $self->{enobufs_timer};
 				return $self->{ww} = &AE::io( $self->{fh}, 1, sub { $self and $self->_ww; });
 			};
 			return;
@@ -351,11 +353,9 @@ sub _ww {
 				
 				$next = exists $cur->{next} && $cur->{next};
 				$self->insert_after($cur,{},[sub {
-					#warn "sub ".dumper $_[0];
 					$self->{max_msg_size} = $detect->{size};
 					$self->{max_buf_size} = $wcur->{written};
 					
-					#warn "Full wbuf: ".dumper $wcur, $detect, $self;
 					warn "Detected size: $self->{max_msg_size} ($self->{max_buf_size}). Left: $detect->{left}";
 					$self->insert_after($_[0],$wcur,[ $detect->{left} ]);
 					#warn "inserted";
@@ -390,15 +390,31 @@ sub sock_connect {
 	shift->_connect_stream;
 }
 
-use Sys::Syslog ':macros';
-use POSIX ();
+sub connect : method {
+	shift->_connect_stream;
+}
 
-sub stime () {
-	my $oldlocale = POSIX::setlocale(POSIX::LC_TIME);
-	POSIX::setlocale(POSIX::LC_TIME, 'C');
-	my $timestamp = POSIX::strftime "%b %e %H:%M:%S", localtime;
-	POSIX::setlocale(POSIX::LC_TIME, $oldlocale);
-	$timestamp;
+{
+	my $tzgen = int(time()/600)*600;
+	my $tzoff = timegm_nocheck( localtime($tzgen) ) - $tzgen;
+	
+	sub localtime_c (;$) {
+		my $time = shift // time();
+		if ($time > $tzgen + 600) {
+			$tzgen = int($time/600)*600;
+			$tzoff = timegm_nocheck( localtime($tzgen) ) - $tzgen;
+		}
+		gmtime($time+$tzoff);
+	}
+	
+	sub stime () {
+		my ($time,$ms) = Time::HiRes::gettimeofday();
+		if ($time > $tzgen + 600) {
+			$tzgen = int($time/600)*600;
+			$tzoff = timegm_nocheck( localtime($tzgen) ) - $tzgen;
+		}
+		sprintf("%s.%03d",POSIX::strftime("%Y-%m-%dT%H:%M:%S",gmtime($time+$tzoff)),int($ms/1000));
+	}
 }
 
 sub _printq {
@@ -412,7 +428,8 @@ sub _printq {
 		if (exists $cur->{next}) {
 			$cur = $cur->{next};
 			if ($seen{0+$cur}) {
-				die "Catched recursion! ".dumper $self->{wbuf};
+				use Data::Dumper;
+				die "Catched recursion! ".Dumper $self->{wbuf};
 				return;
 			}
 		} else {
@@ -433,6 +450,9 @@ sub syslog {
 	} else {
 		$msg = "@_";
 	}
+	$msg =~ y/\015//;
+	utf8::decode($msg);
+	$msg =~ s{\s}{ }sg;
 	utf8::encode $msg if utf8::is_utf8 $msg;
 	$msg =~ s{(\r?\n)+$}{}s;
 	
@@ -460,6 +480,7 @@ sub syslog {
 			stime,
 			$self->{ident}, $self->{pid} ? "[$$]" : '',
 		;
+		#warn $raw;
 		my @parts;
 		if ($self->{max_msg_size} and length $msg > $self->{max_msg_size}) {
 			my $size = $self->{max_msg_size};
@@ -478,7 +499,6 @@ sub syslog {
 		}
 	}
 	#$self->_printq;
-	#warn dumper $self->{wbuf};
 	if ($self->{connected}) {
 		$self->_ww;
 	} else {
@@ -488,13 +508,21 @@ sub syslog {
 	return;
 }
 
+sub DESTROY {
+	my $self = shift;
+	if ($self->{wsize} > 0 and ( length $self->{wbuf}{w} > 0 or $self->{wbuf}{next})) {
+		warn "discarding $self->{wsize} unsent messages ($self->{wbuf}{s})\n";
+		$self->_printq;
+	}
+}
+
 =head1 AUTHOR
 
 Mons Anderson, C<< <mons@cpan.org> >>
 
 =head1 COPYRIGHT & LICENSE
 
-Copyright 2012 Mons Anderson, all rights reserved.
+Copyright 2012-2015 Mons Anderson, all rights reserved.
 
 This program is free software; you can redistribute it and/or modify it
 under the terms of either: the GNU General Public License as published
