@@ -407,13 +407,20 @@ sub connect : method {
 		gmtime($time+$tzoff);
 	}
 	
+	my $last_value = 0;
+	my $last_formated_value = undef;
 	sub stime () {
 		my ($time,$ms) = Time::HiRes::gettimeofday();
 		if ($time > $tzgen + 600) {
 			$tzgen = int($time/600)*600;
 			$tzoff = timegm_nocheck( localtime($tzgen) ) - $tzgen;
 		}
-		sprintf("%s.%03d",POSIX::strftime("%Y-%m-%dT%H:%M:%S",gmtime($time+$tzoff)),int($ms/1000));
+		my $seconds = $time+$tzoff;
+		if ( $seconds != $last_value ) {
+			$last_value = $seconds;
+			$last_formated_value = POSIX::strftime("%Y-%m-%dT%H:%M:%S",gmtime($seconds));
+		}
+		sprintf('%s.%03d',$last_formated_value,int($ms/1000));
 	}
 }
 
