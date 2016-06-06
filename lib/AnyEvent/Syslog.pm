@@ -43,7 +43,7 @@ our $VERSION = '0.01'; $VERSION = eval($VERSION);
 use Socket qw(sockaddr_un AF_UNIX SOCK_STREAM SOCK_DGRAM);
 use AnyEvent::Util qw(guard fh_nonblocking);
 use Errno ();
-use Scalar::Util;
+use Scalar::Util qw(weaken);
 
 sub LOG_EMERG    () { 0 }
 sub LOG_ALERT    () { 1 }
@@ -114,14 +114,21 @@ our %FACILITY = (
 
 sub new {
 	my $pk = shift;
+
 	my $self = bless {
 		facility    => 'user',
-		socket      => '/dev/log',
+		socket      => (
+			-e '/dev/log'        ? '/dev/log' :
+			-e '/var/run/syslog' ? '/var/run/syslog' :
+			'/dev/log'
+		),
 		socket_type => SOCK_STREAM,
 		pid         => 1,
 		max_queue_size => 10,
+		rfc5424     => 1,
 		@_,
 	}, $pk;
+	$self->{timestamp} = $self->{rfc5424} ? \&stime : \&oldtime;
 	$self->{ident} = basename($0) || getlogin() || getpwuid($<) || 'syslog' unless length $self->{ident};
 	-S $self->{socket} or -c $self->{socket}  or croak "$self->{socket} is not a socket";
 	exists $FACILITY{$self->{facility}} or croak "Unknown facility: $self->{facility}";
@@ -192,7 +199,7 @@ sub _connect_stream {
 		return $self->_connect_dgram;
 	}
 	else {
-		return $self->_connect_error( "Can't connect stream socket: $!" );
+		return $self->_connect_error( "Can't connect stream socket `$self->{socket}': $!" );
 	}
 }
 
@@ -206,7 +213,7 @@ sub _connect_dgram {
 		$self->_connect_ready($sock);
 	}
 	else {
-		return $self->_connect_error( "Can't connect dgram socket: $!" );
+		return $self->_connect_error( "Can't connect dgram socket `$self->{socket}': $!" );
 	}
 }
 
@@ -300,8 +307,8 @@ sub _ww {
 		}
 		my $buf = $cur->{pre}.$cur->{w}.$cur->{eol};
 		my $need = length $buf;
-		#warn "writing $need bytes [".substr($buf,0,length($buf) - 2)."]";
-		#warn "writing $cur->{s}";
+		# warn "writing $need bytes [".substr($buf,0,length($buf) - 2)."]";
+		# warn "writing $cur->{s}";
 		my $len = syswrite $self->{fh}, $buf, $need, 0;
 		if (defined $len) {
 			if ($need > $len) {
@@ -422,6 +429,14 @@ sub connect : method {
 		}
 		sprintf('%s.%03d',$last_formated_value,int($ms/1000));
 	}
+
+	sub oldtime () {
+		my $oldlocale = POSIX::setlocale(POSIX::LC_TIME);
+		POSIX::setlocale(POSIX::LC_TIME, 'C');
+		my $timestamp = POSIX::strftime "%b %e %H:%M:%S", localtime_c;
+		POSIX::setlocale(POSIX::LC_TIME, $oldlocale);
+		$timestamp;	
+	}
 }
 
 sub _printq {
@@ -484,7 +499,7 @@ sub syslog {
 	for my $facility (@facilities) {
 		my $raw = sprintf "<%d>%s %s%s: ",
 			$levels | $facility,
-			stime,
+			$self->{timestamp}->(),
 			$self->{ident}, $self->{pid} ? "[$$]" : '',
 		;
 		#warn $raw;
